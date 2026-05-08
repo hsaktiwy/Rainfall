@@ -2,7 +2,8 @@
 a.out
 IDEA.TXT
 exe.*
-shell*
+shell*.bin
+shell*.o
 main*
 a.out
 TEXT.TXT

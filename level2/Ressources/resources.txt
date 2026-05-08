@@ -1,0 +1,5 @@
+
+https://medium.com/@iwhoam047/stack-overflows-for-beginners-1-41acf75d230
+https://en.wikipedia.org/wiki/Buffer_overflow
+https://linux-audit.com/monitor-file-access-by-linux-processes/
+https://medium.com/@boutnaru/the-linux-concept-journey-ltrace-library-call-tracer-123fe6e7739a

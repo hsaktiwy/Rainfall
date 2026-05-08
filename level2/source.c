@@ -1,21 +1,20 @@
 #include <stdio.h>
 
-void p(void *arg) {
+char	*p(void)
+{
+	char	buffer[64];       // ebp-0x4c - ebp-0xc = 64
+	void	*return_addr;
 
-    char buffer[64];//0xc -> 12
-    //76
-    // Flush stdout
-    fflush(stdout);
-    gets(buffer);
-    void *arg_copy = arg;
-    if ((buffer & 0xb0000000) == 0xb0000000) {
-        _exit(1);
-    }
-        printf("(%p)\n", arg_copy);
-
-    puts(buffer);
-    strdup(buffer);
-    return;
+	fflush(stdout);
+	gets(buffer);
+	return_addr = __builtin_return_address (0);      // 0 for the current function
+	if (((unsigned int)return_addr & 0xb0000000) == 0xb0000000)
+	{
+		printf("%p\n", return_addr);
+		exit(1);
+	}
+	puts(buffer);
+	return (strdup(buffer));
 }
 
 int main()

