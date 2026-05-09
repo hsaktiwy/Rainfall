@@ -1,0 +1,3 @@
+https://medium.com/@danielorihuelarodriguez/format-string-vulnerability-439acbe81ddf
+https://en.wikipedia.org/wiki/Uncontrolled_format_string
+https://medium.com/@gurdeeps158/exploit-format-string-vulnerability-in-printf-6740d9ff057e
